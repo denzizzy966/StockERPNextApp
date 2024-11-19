@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/stock_provider.dart';
 import '../models/stock_entry.dart';
-import '../models/item.dart';
-import '../models/warehouse.dart';
 
 class StockEntryScreen extends StatefulWidget {
   final String stockEntryType;
@@ -83,13 +81,19 @@ class _StockEntryScreenState extends State<StockEntryScreen> {
       decoration: InputDecoration(
         labelText: label,
         border: const OutlineInputBorder(),
+        filled: true,
+        fillColor: Colors.white,
       ),
+      dropdownColor: Colors.white,
       value: value,
       items: warehouses
           .map(
             (w) => DropdownMenuItem(
-              value: w.name,
-              child: Text(w.warehouseName),
+              value: w.name ?? '',
+              child: Text(
+                w.warehouseName ?? w.name ?? 'Unknown',
+                style: const TextStyle(color: Colors.black),
+              ),
             ),
           )
           .toList(),
@@ -114,25 +118,33 @@ class _StockEntryScreenState extends State<StockEntryScreen> {
                     decoration: const InputDecoration(
                       labelText: 'Item',
                       border: OutlineInputBorder(),
+                      filled: true,
+                      fillColor: Colors.white,
                     ),
+                    dropdownColor: Colors.white,
                     value: item.item,
                     items: items
                         .map(
                           (i) => DropdownMenuItem(
-                            value: i.itemCode,
-                            child: Text(i.itemName),
+                            value: i.itemCode ?? '',
+                            child: Text(
+                              i.itemName ?? i.itemCode ?? 'Unknown',
+                              style: const TextStyle(color: Colors.black),
+                            ),
                           ),
                         )
                         .toList(),
                     onChanged: (value) {
                       if (value != null) {
+                        final selectedItem = items.firstWhere(
+                          (i) => i.itemCode == value,
+                          orElse: () => items.first,
+                        );
                         setState(() {
                           _items[index] = StockEntryItem(
                             item: value,
                             qty: item.qty,
-                            uom: items
-                                .firstWhere((i) => i.itemCode == value)
-                                .uom,
+                            uom: selectedItem.stockUom ?? 'Nos',
                             fromWarehouse: item.fromWarehouse,
                             toWarehouse: item.toWarehouse,
                           );
@@ -182,9 +194,9 @@ class _StockEntryScreenState extends State<StockEntryScreen> {
     setState(() {
       _items.add(
         StockEntryItem(
-          item: items.first.itemCode,
+          item: items.first.itemCode ?? '',
           qty: 0,
-          uom: items.first.uom,
+          uom: items.first.stockUom ?? 'Nos',
           fromWarehouse: _fromWarehouse ?? '',
           toWarehouse: _toWarehouse ?? '',
         ),

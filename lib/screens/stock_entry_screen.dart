@@ -220,7 +220,7 @@ class _StockEntryScreenState extends State<StockEntryScreen> {
 
     try {
       final provider = Provider.of<StockProvider>(context, listen: false);
-      await provider.createStockEntry(stockEntry);
+      await provider.createStockEntry(stockEntry.toJson());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Stock entry created successfully')),

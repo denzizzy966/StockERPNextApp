@@ -5,7 +5,6 @@ import 'providers/stock_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/stock_entry_list_screen.dart';
 import 'screens/item_list_screen.dart';
-import 'config/config.dart';
 
 void main() {
   runApp(const MyApp());

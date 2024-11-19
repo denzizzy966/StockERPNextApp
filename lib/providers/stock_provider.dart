@@ -1,53 +1,70 @@
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
-import 'package:logging/logging.dart';
-import '../models/item.dart';
 import '../models/warehouse.dart';
+import '../models/item.dart';
 import '../models/stock_entry.dart';
 import '../services/api_service.dart';
+import 'package:logging/logging.dart';
 
 class StockProvider with ChangeNotifier {
   final ApiService _apiService;
-  final _logger = Logger('StockProvider');
+  final Logger _logger = Logger('StockProvider');
   
   List<Item> _items = [];
   List<Warehouse> _warehouses = [];
-  List<Map<String, dynamic>> _stockEntries = [];
-  Map<String, Map<String, double>> _binStock = {};
-
-  // Filter state
+  final List<StockEntry> _stockEntries = [];
   String? _selectedWarehouse;
-  String? _searchQuery;
-
+  String _searchQuery = '';
+  bool _showLowStock = false;
   bool _isLoading = false;
   String? _error;
+  String? _selectedStockEntryType;
+  String? _selectedStockEntryStatus;
+  DateTime? _startDate;
+  DateTime? _endDate;
+  final Map<String, Map<String, double>> _binStock = {};
+  final Map<String, Map<String, double>> _reorderLevels = {};
 
   StockProvider(this._apiService);
 
-  List<Item> get items {
-    if (_searchQuery?.isEmpty ?? true) {
-      return _items;
-    }
-    return _items.where((item) =>
-      (item.itemCode?.toLowerCase().contains(_searchQuery!.toLowerCase()) ?? false) ||
-      (item.itemName?.toLowerCase().contains(_searchQuery!.toLowerCase()) ?? false)
-    ).toList();
-  }
-
-  List<Warehouse> get warehouses => _warehouses;
-  List<Map<String, dynamic>> get stockEntries => _stockEntries;
-  String? get selectedWarehouse => _selectedWarehouse;
-  String? get searchQuery => _searchQuery;
   bool get isLoading => _isLoading;
   String? get error => _error;
+  List<Item> get items => _showLowStock ? _items.where((item) => _isLowStock(item)).toList() : _items;
+  List<Item> get filteredItems => _searchQuery.isEmpty 
+      ? items 
+      : items.where((item) => 
+          (item.itemName?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false) ||
+          (item.itemCode?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false)
+        ).toList();
+  List<Warehouse> get warehouses => _warehouses;
+  String? get selectedWarehouse => _selectedWarehouse;
+  List<StockEntry> get stockEntries => _stockEntries;
+  String? get selectedStockEntryType => _selectedStockEntryType;
+  String? get selectedStockEntryStatus => _selectedStockEntryStatus;
+  DateTime? get startDate => _startDate;
+  DateTime? get endDate => _endDate;
 
-  void setSelectedWarehouse(String? warehouse) {
+  void setSelectedWarehouse(String warehouse) {
     _selectedWarehouse = warehouse;
+    loadWarehouseStock(warehouse);
+    loadReorderLevels();
     notifyListeners();
   }
 
-  void setSearchQuery(String? query) {
+  void setStockEntryFilters({
+    String? type,
+    String? status,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) {
+    _selectedStockEntryType = type;
+    _selectedStockEntryStatus = status;
+    _startDate = startDate;
+    _endDate = endDate;
+    loadStockEntries();
+    notifyListeners();
+  }
+
+  void filterItems(String query) {
     _searchQuery = query;
     notifyListeners();
   }
@@ -58,36 +75,11 @@ class StockProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final items = await _apiService.getItems();
-      _items = items;
-      await _cacheItems();
-      _logger.info('Successfully loaded ${items.length} items');
+      _items = await _apiService.getItems();
+      notifyListeners();
     } catch (e) {
       _error = 'Failed to load items: $e';
-      _logger.severe(_error);
-      // Try to load from cache
-      await _loadCachedItems();
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> loadWarehouses() async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      final warehouses = await _apiService.getWarehouses();
-      _warehouses = warehouses;
-      await _cacheWarehouses();
-      _logger.info('Successfully loaded ${warehouses.length} warehouses');
-    } catch (e) {
-      _error = 'Failed to load warehouses: $e';
-      _logger.severe(_error);
-      // Try to load from cache
-      await _loadCachedWarehouses();
+      _logger.severe('Error loading items', e);
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -100,114 +92,166 @@ class StockProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final entries = await _apiService.getStockEntries();
-      _stockEntries = entries;
-      _logger.info('Successfully loaded ${entries.length} stock entries');
+      final entries = await _apiService.getStockEntries(
+        warehouse: _selectedWarehouse,
+        type: _selectedStockEntryType,
+        status: _selectedStockEntryStatus,
+        startDate: _startDate,
+        endDate: _endDate,
+      );
+      _stockEntries.clear();
+      _stockEntries.addAll(entries);
+      notifyListeners();
     } catch (e) {
       _error = 'Failed to load stock entries: $e';
-      _logger.severe(_error);
+      _logger.severe('Error loading stock entries', e);
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  Future<double> getBinStock(String item, String warehouse) async {
+  Future<void> loadWarehouses() async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
     try {
-      if (_binStock[item]?[warehouse] != null) {
-        return _binStock[item]![warehouse]!;
-      }
-
-      final stock = await _apiService.getBinStock(item, warehouse);
-      _binStock[item] = {..._binStock[item] ?? {}, warehouse: stock};
-      
-      // Cache bin stock
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_binstock', binStockToJson(_binStock));
-      
-      _logger.info('Successfully cached bin stock for $item in $warehouse');
+      _warehouses = await _apiService.getWarehouses();
       notifyListeners();
-      return stock;
     } catch (e) {
-      _logger.severe('Error getting bin stock: $e');
-      // Try to load from cache
-      final prefs = await SharedPreferences.getInstance();
-      final cachedBinStock = prefs.getString('cached_binstock');
-      if (cachedBinStock != null) {
-        _binStock = binStockFromJson(cachedBinStock);
-        return _binStock[item]?[warehouse] ?? 0.0;
-      }
-      rethrow;
+      _error = 'Failed to load warehouses: $e';
+      _logger.severe('Error loading warehouses', e);
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
-  Future<String> createStockEntry(StockEntry stockEntry) async {
+  Future<void> loadWarehouseStock(String warehouse) async {
     try {
-      final result = await _apiService.createStockEntry(stockEntry);
-      // Clear cache after stock entry
-      for (var item in stockEntry.items) {
-        if (stockEntry.fromWarehouse.isNotEmpty) {
-          await getBinStock(item.item, stockEntry.fromWarehouse);
+      for (var item in _items) {
+        if (item.itemCode == null) continue;
+        final String itemCode = item.itemCode!;
+        
+        final stock = await _apiService.getBinStock(itemCode, warehouse);
+        if (_binStock[itemCode] == null) {
+          _binStock[itemCode] = {};
         }
-        if (stockEntry.toWarehouse.isNotEmpty) {
-          await getBinStock(item.item, stockEntry.toWarehouse);
+        _binStock[itemCode]![warehouse] = stock;
+      }
+      notifyListeners();
+    } catch (e) {
+      _logger.severe('Error loading warehouse stock', e);
+    }
+  }
+
+  Future<double> getBinStock(String itemCode, String warehouse) async {
+    try {
+      if (!_binStock.containsKey(itemCode) || !_binStock[itemCode]!.containsKey(warehouse)) {
+        final stock = await _apiService.getBinStock(itemCode, warehouse);
+        if (_binStock[itemCode] == null) {
+          _binStock[itemCode] = {};
+        }
+        _binStock[itemCode]![warehouse] = stock;
+      }
+      return _binStock[itemCode]?[warehouse] ?? 0.0;
+    } catch (e) {
+      _logger.severe('Error getting bin stock', e);
+      return 0.0;
+    }
+  }
+
+  Future<void> loadReorderLevels() async {
+    if (_selectedWarehouse == null) return;
+    final String warehouse = _selectedWarehouse!;
+
+    try {
+      for (var item in _items) {
+        if (item.itemCode == null) continue;
+        final String itemCode = item.itemCode!;
+        
+        final response = await _apiService.getItemDetails(itemCode);
+        if (response != null && response['reorder_levels'] != null) {
+          final reorderLevels = response['reorder_levels'] as List;
+          for (var level in reorderLevels) {
+            if (level['warehouse'] == warehouse) {
+              if (_reorderLevels[itemCode] == null) {
+                _reorderLevels[itemCode] = {};
+              }
+              _reorderLevels[itemCode]![warehouse] = 
+                  double.tryParse(level['warehouse_reorder_level'].toString()) ?? 0.0;
+            }
+          }
         }
       }
-      _logger.info('Successfully created stock entry');
-      return result;
+      notifyListeners();
     } catch (e) {
-      _logger.severe('Error creating stock entry: $e');
+      _logger.severe('Error loading reorder levels', e);
+    }
+  }
+
+  bool _isLowStock(Item item) {
+    if (_selectedWarehouse == null || item.itemCode == null) return false;
+    final String warehouse = _selectedWarehouse!;
+    final String itemCode = item.itemCode!;
+    
+    final stockLevel = _binStock[itemCode]?[warehouse] ?? 0.0;
+    final reorderLevel = _reorderLevels[itemCode]?[warehouse] ?? 0.0;
+    
+    return stockLevel <= reorderLevel;
+  }
+
+  void showLowStockItems() {
+    _showLowStock = true;
+    notifyListeners();
+  }
+
+  Future<void> createStockEntry(Map<String, dynamic> entryData) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      // Create a StockEntry object using the fromJson factory constructor
+      final stockEntry = StockEntry.fromJson(entryData);
+      
+      // Send the stock entry to the API
+      await _apiService.createStockEntry(stockEntry);
+      await loadStockEntries();
+    } catch (e) {
+      _error = 'Failed to create stock entry: $e';
+      _logger.severe('Error creating stock entry', e);
       rethrow;
-    }
-  }
-
-  Future<void> _cacheItems() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('cached_items', itemsToJson(_items));
-    _logger.info('Successfully cached ${_items.length} items');
-  }
-
-  Future<void> _loadCachedItems() async {
-    final prefs = await SharedPreferences.getInstance();
-    final cachedItems = prefs.getString('cached_items');
-    if (cachedItems != null) {
-      _items = itemsFromJson(cachedItems);
+    } finally {
+      _isLoading = false;
       notifyListeners();
     }
   }
 
-  Future<void> _cacheWarehouses() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('cached_warehouses', warehousesToJson(_warehouses));
-    _logger.info('Successfully cached ${_warehouses.length} warehouses');
-  }
-
-  Future<void> _loadCachedWarehouses() async {
-    final prefs = await SharedPreferences.getInstance();
-    final cachedWarehouses = prefs.getString('cached_warehouses');
-    if (cachedWarehouses != null) {
-      _warehouses = warehousesFromJson(cachedWarehouses);
-      notifyListeners();
+  Future<List<Warehouse>> getWarehousesWithStock() async {
+    List<Warehouse> warehousesWithStock = [];
+    for (var warehouse in _warehouses) {
+      if (warehouse.name == null) continue;
+      final String warehouseName = warehouse.name!;
+      
+      try {
+        bool hasStock = false;
+        for (var item in _items) {
+          if (item.itemCode == null) continue;
+          final stock = await _apiService.getBinStock(item.itemCode!, warehouseName);
+          if (stock > 0) {
+            hasStock = true;
+            break;
+          }
+        }
+        if (hasStock) {
+          warehousesWithStock.add(warehouse);
+        }
+      } catch (e) {
+        _logger.warning('Error checking stock for warehouse ${warehouse.name}', e);
+      }
     }
-  }
-
-  // Helper methods for JSON conversion
-  String itemsToJson(List<Item> items) => jsonEncode(items.map((e) => e.toJson()).toList());
-  List<Item> itemsFromJson(String json) => 
-      (jsonDecode(json) as List).map((e) => Item.fromJson(e)).toList();
-
-  String warehousesToJson(List<Warehouse> warehouses) => 
-      jsonEncode(warehouses.map((e) => e.toJson()).toList());
-  List<Warehouse> warehousesFromJson(String json) =>
-      (jsonDecode(json) as List).map((e) => Warehouse.fromJson(e)).toList();
-
-  String binStockToJson(Map<String, Map<String, double>> binStock) =>
-      jsonEncode(binStock);
-  Map<String, Map<String, double>> binStockFromJson(String json) {
-    final Map<String, dynamic> decoded = jsonDecode(json);
-    return decoded.map((key, value) => MapEntry(
-      key,
-      (value as Map<String, dynamic>).map((k, v) => MapEntry(k, v.toDouble()))
-    ));
+    return warehousesWithStock;
   }
 }

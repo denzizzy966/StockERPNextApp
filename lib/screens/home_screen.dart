@@ -15,11 +15,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
-      final provider = Provider.of<StockProvider>(context, listen: false);
-      provider.loadItems();
-      provider.loadWarehouses();
-    });
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    if (!mounted) return;
+    final provider = Provider.of<StockProvider>(context, listen: false);
+    await provider.loadItems();
+    if (!mounted) return;
+    await provider.loadWarehouses();
   }
 
   @override

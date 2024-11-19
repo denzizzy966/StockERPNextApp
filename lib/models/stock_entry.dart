@@ -5,6 +5,9 @@ class StockEntry {
   final String fromWarehouse;
   final String toWarehouse;
   final List<StockEntryItem> items;
+  final int docstatus;
+  final String? modified;
+  final String? owner;
 
   StockEntry({
     required this.name,
@@ -13,6 +16,9 @@ class StockEntry {
     required this.fromWarehouse,
     required this.toWarehouse,
     required this.items,
+    this.docstatus = 0,
+    this.modified,
+    this.owner,
   });
 
   Map<String, dynamic> toJson() {
@@ -23,6 +29,7 @@ class StockEntry {
       'from_warehouse': fromWarehouse,
       'to_warehouse': toWarehouse,
       'items': items.map((item) => item.toJson()).toList(),
+      'docstatus': docstatus,
     };
   }
 
@@ -36,6 +43,9 @@ class StockEntry {
       items: (json['items'] as List<dynamic>?)
           ?.map((item) => StockEntryItem.fromJson(item))
           .toList() ?? [],
+      docstatus: json['docstatus'] as int? ?? 0,
+      modified: json['modified'] as String?,
+      owner: json['owner'] as String?,
     );
   }
 }
